@@ -47,9 +47,9 @@ class TargetDetectionNode(Node):
         hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
 
         # Widen the lower and upper bounds for red in HSV
-        lower_red1 = np.array([0, 100, 50])   # More tolerant to dark and faded reds
+        lower_red1 = np.array([0, 90, 50])   # More tolerant to dark and faded reds
         upper_red1 = np.array([20, 255, 255]) # Increased upper hue to 15
-        lower_red2 = np.array([165, 100, 50]) # Expanded lower hue to 165
+        lower_red2 = np.array([165, 90, 50]) # Expanded lower hue to 165
         upper_red2 = np.array([180, 255, 255]) 
 
         # Get image dimensions
@@ -80,8 +80,9 @@ class TargetDetectionNode(Node):
             minr = 5
             maxr = 70
         else:
-            minr = int(25/current_position[2] - 10)
-            maxr = int(25/current_position[2] + 15)
+            minr = max(int(25/max(current_position[2], 0.2) - 10), 5)
+            maxr = int(25/max(current_position[2], 0.2) + 15)
+            
         # Detect circles using Hough Transform
         circles = cv2.HoughCircles(
             blurred, cv2.HOUGH_GRADIENT, dp=1.2, minDist=30,
@@ -102,7 +103,7 @@ class TargetDetectionNode(Node):
                     lrad = i[2]
                 cv2.circle(image, (i[0], i[1]), i[2], (0, 255, 0), 2)
                 cv2.circle(image, (i[0], i[1]), 2, (0, 0, 255), 3)
-            self.get_logger().info(f"radius: {lrad}")
+            self.get_logger().info(f"radius: {lrad}, min: {minr}, max: {maxr}")
             control_cmd = self.compute_control_command(image, largest_circle) # visual servoing
         #blurred = cv2.cvtColor(blurred, cv2.COLOR_GRAY2BGR)
         return detected, image, control_cmd
