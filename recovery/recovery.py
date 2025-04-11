@@ -12,7 +12,7 @@ p = 0.35
 # each tile is 0.61m
 # relative to drone
 # +x is toward windows, +y towards workspace
-guess = np.array([4.5*0.61, 3.5*0.61, 0])
+guess = np.array([4*0.61, 5*0.61, 0])
 
 WAYPOINTS = np.array([[0,0,z],
                     [p, 0, z],
@@ -127,7 +127,7 @@ class CommNode(Node):
         DETECTED = msg.data
     
     def control_loop(self):
-        global STATE, WAYPOINTS, WAYPOINT_INDEX, WAYPOINTS_RECEIVED, INITIAL_POSITION, SETPOINT_POSITION, KP_rec, KP_search, current_position, detected_pos, wait, real
+        global STATE, WAYPOINTS, WAYPOINT_INDEX, WAYPOINTS_RECEIVED, INITIAL_POSITION, SETPOINT_POSITION, KP_rec, KP_search, current_position, detected_pos, wait, real, detected_count
 
         if STATE == 'Launch':
             SETPOINT_POSITION =INITIAL_POSITION + np.array([0, 0, 1.5])
@@ -144,6 +144,7 @@ class CommNode(Node):
                 self.get_logger().info("Target detected, attempting Flyover.")
                 detected_pos = self.get_current_vision_pose()
                 real = 0
+                detected_count = 0
                 STATE = "Flyover"
             
             elif WAYPOINT_INDEX < len(WAYPOINTS):
@@ -165,22 +166,23 @@ class CommNode(Node):
                 current_position = self.get_current_vision_pose()
                 control = self.get_current_control_dir()
                 real += 1
-                if np.max(control) > 0.04: # tune to determine how close is close enough
-                    SETPOINT_POSITION = current_position + KP_rec * control
-                    SETPOINT_POSITION[2] = 1
+                SETPOINT_POSITION = current_position + KP_rec * control
+                SETPOINT_POSITION[2] = 1 # tune height
                 
-                elif real >= 80 and np.max(control) < 0.04:
-                        SETPOINT_POSITION = current_position
-                        SETPOINT_POSITION[2] = 1
-                        self.get_logger().info("Flyover complete, hooking.")
-                        current_position = self.get_current_vision_pose()
-                        STATE = "Hook"
+                if real >= 80 and np.max(control) < 0.03:# tune to determine how close is close enough
+                        #SETPOINT_POSITION = current_position
+                        detected_count += 1 # make sure target is really centered
+                        if detected_count >= 10:
+                            self.get_logger().info("Flyover complete, hooking.")
+                            current_position = self.get_current_vision_pose()
+                            STATE = "Hook"
+                            
                 wait = 0
                 detected_pos = self.get_current_vision_pose()
             else:
                 self.get_logger().info("Target lost.")
                 SETPOINT_POSITION = detected_pos
-                SETPOINT_POSITION[2] = 1
+                SETPOINT_POSITION[2] = 1 # tune height
                 if self.reached_setpoint(SETPOINT_POSITION):
                     wait += 1
                     if wait >= 80:
@@ -215,14 +217,14 @@ class CommNode(Node):
         
         elif STATE == "Drop Off":
             current_position = self.get_current_vision_pose()
-            SETPOINT_POSITION = np.array([current_position[0], current_position[1], 0.2])
+            SETPOINT_POSITION = np.array([current_position[0], current_position[1], 0.17])
             if self.reached_setpoint(SETPOINT_POSITION):
                 self.get_logger().info("Lowered, unhooking.")
                 current_position = self.get_current_vision_pose()
                 STATE = "Unhook"
 
         elif STATE == "Unhook":
-            SETPOINT_POSITION = np.array([current_position[0]-0.5, current_position[1], 0.2])
+            SETPOINT_POSITION = np.array([current_position[0]-0.5, current_position[1], 0.17])
             if self.reached_setpoint(SETPOINT_POSITION):
                 current_position = self.get_current_vision_pose()
                 self.get_logger().info("Returning to home.")
