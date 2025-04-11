@@ -47,17 +47,17 @@ class TargetDetectionNode(Node):
         hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
 
         # Widen the lower and upper bounds for red in HSV
-        lower_red1 = np.array([0, 90, 50])   # More tolerant to dark and faded reds
-        upper_red1 = np.array([20, 255, 255]) # Increased upper hue to 15
-        lower_red2 = np.array([165, 90, 50]) # Expanded lower hue to 165
-        upper_red2 = np.array([180, 255, 255]) 
+        lower_red1 = np.array([0, 85, 40])   # More tolerant to dark and faded reds
+        upper_red1 = np.array([8, 255, 255]) # Increased upper hue to 15
+        lower_red2 = np.array([170, 85, 40]) # Expanded lower hue to 165
+        upper_red2 = np.array([185, 255, 255]) 
 
         # Get image dimensions
-        height, width = image.shape[:2]
-        mask = np.zeros((height, width), dtype=np.uint8)
-        center_x, center_y = width // 2, height // 2
-        cv2.circle(mask, (center_x, center_y), 180, 255, -1)
-        masked_image = cv2.bitwise_and(image, image, mask=mask)
+        #height, width = image.shape[:2]
+        #mask = np.zeros((height, width), dtype=np.uint8)
+        #center_x, center_y = width // 2, height // 2
+        #cv2.circle(mask, (center_x, center_y), 180, 255, -1)
+        #masked_image = cv2.bitwise_and(image, image, mask=mask)
 
         # Create masks for both red ranges
         mask1 = cv2.inRange(hsv, lower_red1, upper_red1)
@@ -65,7 +65,7 @@ class TargetDetectionNode(Node):
         mask = mask1 + mask2  # Combine both masks
 
         # Apply mask to keep only red regions
-        red_only = cv2.bitwise_and(masked_image, masked_image, mask=mask)
+        red_only = cv2.bitwise_and(image, image, mask=mask)
 
         # Convert masked image to grayscale
         gray = cv2.cvtColor(red_only, cv2.COLOR_BGR2GRAY)
@@ -103,9 +103,11 @@ class TargetDetectionNode(Node):
                     lrad = i[2]
                 cv2.circle(image, (i[0], i[1]), i[2], (0, 255, 0), 2)
                 cv2.circle(image, (i[0], i[1]), 2, (0, 0, 255), 3)
-            self.get_logger().info(f"radius: {lrad}, min: {minr}, max: {maxr}")
+            if current_position is not None:
+                self.get_logger().info(f"radius: {lrad}, min: {minr}, max: {maxr}, h: {current_position[2]}")
+            print(hsv[largest_circle[1], largest_circle[0]])
             control_cmd = self.compute_control_command(image, largest_circle) # visual servoing
-        #blurred = cv2.cvtColor(blurred, cv2.COLOR_GRAY2BGR)
+        blurred = cv2.cvtColor(blurred, cv2.COLOR_GRAY2BGR)
         return detected, image, control_cmd
 
     def compute_control_command(self, frame, circle_center):

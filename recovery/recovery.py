@@ -7,20 +7,38 @@ from std_srvs.srv import Trigger
 from rclpy.qos import QoSProfile, QoSReliabilityPolicy
 
 STATE = 'Init'
-WAYPOINTS = np.array([[0,0,1],
-                    [1, 0, 1],
-                    [1, 1, 1],
-                    [-1.5, 1, 1],
-                    [0,0,1],
-                    [1.5, 0, 1],
-                    [1.5, 1, 1],
-                    [-1.5, 1, 1]]) # search pattern
+z=1.25
+p = 0.35
+# each tile is 0.61m
+# relative to drone
+# +x is toward windows, +y towards workspace
+guess = np.array([4.5*0.61, 3.5*0.61, 0])
+
+WAYPOINTS = np.array([[0,0,z],
+                    [p, 0, z],
+                    [p, p, z],
+                    [-p, p, z],
+                    [-p,-p,z],
+                    [2*p, -p, z],
+                    [2*p, 2*p, z],
+                    [-2*p, 2*p, z],
+                    [-2*p, -2*p, z],
+                    [3*p, -2*p, z],
+                    [3*p, 3*p, z],
+                    [-3*p, 3*p, z],
+                    [-3*p, -3*p, z],
+                    [4*p, -3*p, z],
+                    [4*p, 4*p, z],
+                    [-4*p, 4*p, z],
+                    [-4*p, -4*p, z]]) # search pattern
+
+WAYPOINTS = WAYPOINTS + guess
 WAYPOINTS_RECEIVED = True
 INITIAL_RECEIVED = False
 DETECTED = False
 WAYPOINT_INDEX = 0
-KP_rec = 0.05
-KP_search = 0.05
+KP_rec = 0.07
+KP_search = 0.15
 INITIAL_POSITION = np.zeros(3)
 SETPOINT_POSITION = np.zeros(3)
 wait = 0
@@ -49,6 +67,8 @@ class CommNode(Node):
         
         # Timer for execution loop
         self.timer = self.create_timer(0.05, self.control_loop)
+
+        self.control_dir = np.zeros(3)
         
         self.get_logger().info("Comm Node Initialized")
     
@@ -96,7 +116,8 @@ class CommNode(Node):
         return getattr(self, 'vision_origin', None)
     
     def callback_vs_dir(self, msg):
-        self.control_dir = np.array([msg.x, msg.y, 0])
+        if DETECTED:
+            self.control_dir = np.array([msg.x, msg.y, 0])
 
     def get_current_control_dir(self):
         return getattr(self, 'control_dir', np.array([0,0,0]))
@@ -106,23 +127,32 @@ class CommNode(Node):
         DETECTED = msg.data
     
     def control_loop(self):
-        global STATE, WAYPOINTS, WAYPOINT_INDEX, WAYPOINTS_RECEIVED, INITIAL_POSITION, SETPOINT_POSITION, KP_rec, KP_search, current_position, detected_pos, wait
+        global STATE, WAYPOINTS, WAYPOINT_INDEX, WAYPOINTS_RECEIVED, INITIAL_POSITION, SETPOINT_POSITION, KP_rec, KP_search, current_position, detected_pos, wait, real
 
         if STATE == 'Launch':
-            SETPOINT_POSITION = np.array([0, 0, 1.5])
+            SETPOINT_POSITION =INITIAL_POSITION + np.array([0, 0, 1.5])
 
         elif STATE == 'Test':
+            SETPOINT_POSITION = WAYPOINTS[WAYPOINT_INDEX] + INITIAL_POSITION
+            self.get_logger().info(f"Moving to waypoint {WAYPOINT_INDEX + 1}/{len(WAYPOINTS)}: {SETPOINT_POSITION}")
+            if self.reached_setpoint(SETPOINT_POSITION):
+                WAYPOINT_INDEX += 1
+                STATE = "Search"
+
+        elif STATE == "Search":
             if DETECTED:
                 self.get_logger().info("Target detected, attempting Flyover.")
                 detected_pos = self.get_current_vision_pose()
+                real = 0
                 STATE = "Flyover"
             
             elif WAYPOINT_INDEX < len(WAYPOINTS):
                 current_position = self.get_current_vision_pose()
-                d = (WAYPOINTS[WAYPOINT_INDEX] - current_position)
+                d = (INITIAL_POSITION + WAYPOINTS[WAYPOINT_INDEX]) - current_position
                 d = d/np.linalg.norm(d)
                 SETPOINT_POSITION = current_position + KP_search * d
-                if self.reached_setpoint(WAYPOINTS[WAYPOINT_INDEX]):
+                SETPOINT_POSITION[2] = 1.25
+                if self.reached_setpoint(INITIAL_POSITION + WAYPOINTS[WAYPOINT_INDEX], 0.1):
                     self.get_logger().info(f"Moving to waypoint {WAYPOINT_INDEX + 1}/{len(WAYPOINTS)}: {SETPOINT_POSITION}")
                     WAYPOINT_INDEX += 1
             else:
@@ -134,61 +164,65 @@ class CommNode(Node):
             if DETECTED:
                 current_position = self.get_current_vision_pose()
                 control = self.get_current_control_dir()
-                if np.max(control) > 0.05: # tune to determine how close is close enough
+                real += 1
+                if np.max(control) > 0.04: # tune to determine how close is close enough
                     SETPOINT_POSITION = current_position + KP_rec * control
-                else:
-                    SETPOINT_POSITION = current_position
-                    self.get_logger().info("Flyover complete, hooking.")
-                    current_position = self.get_current_vision_pose()
-                    detected_pos = self.get_current_vision_pose()
-                    STATE = "Hook"
+                    SETPOINT_POSITION[2] = 1
+                
+                elif real >= 80 and np.max(control) < 0.04:
+                        SETPOINT_POSITION = current_position
+                        SETPOINT_POSITION[2] = 1
+                        self.get_logger().info("Flyover complete, hooking.")
+                        current_position = self.get_current_vision_pose()
+                        STATE = "Hook"
                 wait = 0
+                detected_pos = self.get_current_vision_pose()
             else:
                 self.get_logger().info("Target lost.")
                 SETPOINT_POSITION = detected_pos
+                SETPOINT_POSITION[2] = 1
                 if self.reached_setpoint(SETPOINT_POSITION):
                     wait += 1
-                    if wait >= 40:
-                        WAYPOINT_INDEX = WAYPOINT_INDEX - 1
+                    if wait >= 80:
                         wait = 0
                         STATE = "Test"
 
         elif STATE == "Hook":
-            SETPOINT_POSITION = np.array([current_position[1]-0.2, current_position[2], 0.15])
+            SETPOINT_POSITION = np.array([current_position[0]-0.5, current_position[1], 0.3])
             if self.reached_setpoint(SETPOINT_POSITION):
                 self.get_logger().info("Hooked, recovering.")
                 current_position = self.get_current_vision_pose()
                 STATE = "Recover"
 
         elif STATE == "Recover":
-            SETPOINT_POSITION = np.array([current_position[1]+0.5, current_position[2], 0.15])
+            SETPOINT_POSITION = np.array([current_position[0]+1, current_position[1], 0.3])
             if self.reached_setpoint(SETPOINT_POSITION):
                 current_position = self.get_current_vision_pose()
                 self.get_logger().info("lifting.")
                 STATE = "Lift"
         
         elif STATE == "Lift":
-            SETPOINT_POSITION = np.array([current_position[1], current_position[2], 1])
+            SETPOINT_POSITION = np.array([current_position[0], current_position[1], 1.5])
             if self.reached_setpoint(SETPOINT_POSITION):
                 self.get_logger().info("heading to drop off.")
                 STATE = "Return"
 
         elif STATE == "Return":
-            SETPOINT_POSITION = np.array([1, 0, 1])
+            SETPOINT_POSITION = INITIAL_POSITION + np.array([1, 0, 1])
             if self.reached_setpoint(SETPOINT_POSITION):
                 self.get_logger().info("Dropping.")
                 STATE = "Drop Off"
         
         elif STATE == "Drop Off":
             current_position = self.get_current_vision_pose()
-            SETPOINT_POSITION = np.array([current_position[1], current_position[2], 0.15])
+            SETPOINT_POSITION = np.array([current_position[0], current_position[1], 0.2])
             if self.reached_setpoint(SETPOINT_POSITION):
                 self.get_logger().info("Lowered, unhooking.")
                 current_position = self.get_current_vision_pose()
                 STATE = "Unhook"
 
         elif STATE == "Unhook":
-            SETPOINT_POSITION = np.array([current_position[1]-0.5, current_position[2], 0.15])
+            SETPOINT_POSITION = np.array([current_position[0]-0.5, current_position[1], 0.2])
             if self.reached_setpoint(SETPOINT_POSITION):
                 current_position = self.get_current_vision_pose()
                 self.get_logger().info("Returning to home.")
@@ -201,7 +235,7 @@ class CommNode(Node):
                 STATE = "Land"
 
         elif STATE == 'Land':
-            SETPOINT_POSITION = np.array([0, 0, -0.1])
+            SETPOINT_POSITION = INITIAL_POSITION + np.array([0, 0, -0.1])
         
         elif STATE == 'Abort':
             self.get_logger().error("Emergency Stop! landing.")
@@ -212,7 +246,7 @@ class CommNode(Node):
             current_position = self.get_current_vision_pose()
             SETPOINT_POSITION = np.array(current_position)
 
-        self.publish_setpoint(INITIAL_POSITION + SETPOINT_POSITION)
+        self.publish_setpoint(SETPOINT_POSITION)
     
     def publish_setpoint(self, position):
         pose_msg = PoseStamped()
@@ -223,9 +257,8 @@ class CommNode(Node):
         pose_msg.pose.position.z = position[2]
         self.pub_setpoint.publish(pose_msg)
     
-    def reached_setpoint(self, target_position, threshold=0.1):
+    def reached_setpoint(self, target_position, threshold=0.15):
         global INITIAL_POSITION
-        target_position = target_position + INITIAL_POSITION
         current_position = self.get_current_vision_pose()
         return (current_position is not None) and (np.linalg.norm(current_position - target_position) < threshold)
     
